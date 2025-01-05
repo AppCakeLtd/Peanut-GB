@@ -624,12 +624,17 @@ struct gb_s
 	struct count_s counter;
 
 	/* TODO: Allow implementation to allocate WRAM, VRAM and Frame Buffer. */
-	uint8_t wram[WRAM_SIZE];
-	uint8_t vram[VRAM_SIZE];
-	uint8_t oam[OAM_SIZE];
-	uint8_t hram_io[HRAM_IO_SIZE];
+	// uint8_t wram[WRAM_SIZE];
+	// uint8_t vram[VRAM_SIZE];
+	// uint8_t oam[OAM_SIZE];
+	// uint8_t hram_io[HRAM_IO_SIZE];
 
-	struct
+  uint8_t *wram; // 0x2000
+	uint8_t *vram; // 0x2000
+	uint8_t *oam; // 0x00A0
+	uint8_t *hram_io; // 0x0100
+
+  struct
 	{
 		/**
 		 * Draw line on screen.

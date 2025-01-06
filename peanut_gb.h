@@ -1,3 +1,5 @@
+#pragma GCC optimize("O3")
+
 /**
  * MIT License
  *
@@ -1512,8 +1514,8 @@ void __gb_draw_line(struct gb_s *gb)
 #if PEANUT_GB_12_COLOUR
 			pixels[disp_x] |= LCD_PALETTE_BG;
 #endif
-			t1 = t1 >> 1;
-			t2 = t2 >> 1;
+			t1 >>= 1;
+			t2 >>= 1;
 			px++;
 		}
 	}
@@ -1580,8 +1582,8 @@ void __gb_draw_line(struct gb_s *gb)
 #if PEANUT_GB_12_COLOUR
 			pixels[disp_x] |= LCD_PALETTE_BG;
 #endif
-			t1 = t1 >> 1;
-			t2 = t2 >> 1;
+			t1 >>= 1;
+			t2 >>= 1;
 			px++;
 		}
 
@@ -1717,8 +1719,8 @@ void __gb_draw_line(struct gb_s *gb)
 #endif
 				}
 
-				t1 = t1 >> 1;
-				t2 = t2 >> 1;
+				t1 >>= 1;
+				t2 >>= 1;
 			}
 		}
 	}

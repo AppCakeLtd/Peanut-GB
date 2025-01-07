@@ -121,8 +121,8 @@
 #define ANY_INTR	0x1F
 
 /* Memory section sizes for DMG */
-#define WRAM_SIZE	0x2000
-#define VRAM_SIZE	0x2000
+#define WRAM_SIZE	0x8000
+#define VRAM_SIZE	0x4000
 #define HRAM_IO_SIZE	0x0100
 #define OAM_SIZE	0x00A0
 
@@ -891,6 +891,8 @@ uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
 
 		/* HRAM */
 		if(addr >= IO_ADDR)
+			// printf("read %04x\n", addr);
+			// printf("return %02x\n", gb->hram_io[addr - IO_ADDR]);
 			return gb->hram_io[addr - IO_ADDR];
 	}
 
@@ -905,6 +907,7 @@ uint8_t __gb_read(struct gb_s *gb, uint16_t addr)
  */
 void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 {
+	// printf("write to 0x%04x: 0x%02x\n", addr, val);
 	switch(PEANUT_GB_GET_MSN16(addr))
 	{
 	case 0x0:
@@ -971,14 +974,20 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 		if(gb->mbc == 1)
 		{
 			gb->cart_ram_bank = (val & 3);
+			gb->cart_ram_bank_offset = 0xA000 - (gb->cart_ram_bank << 13);
 			gb->selected_rom_bank = ((val & 3) << 5) | (gb->selected_rom_bank & 0x1F);
 			gb->selected_rom_bank = gb->selected_rom_bank & gb->num_rom_banks_mask;
 		}
 		else if(gb->mbc == 3)
+		{
 			gb->cart_ram_bank = val;
+			gb->cart_ram_bank_offset = 0xA000 - ((gb->cart_ram_bank & 3) << 13);
+		}
 		else if(gb->mbc == 5)
+		{
 			gb->cart_ram_bank = (val & 0x0F);
-
+			gb->cart_ram_bank_offset = 0xA000 - (gb->cart_ram_bank << 13);
+		}
 		return;
 
 	case 0x6:
@@ -992,6 +1001,12 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 
 	case 0x8:
 	case 0x9:
+		if (IS_CGB)
+		{
+			gb->vram[addr - gb->cgb.vramBankOffset] = val;
+			return;
+		}
+
 		gb->vram[addr - VRAM_ADDR] = val;
 		return;
 
@@ -1035,7 +1050,12 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 		return;
 
 	case 0xD:
-		gb->wram[addr - WRAM_1_ADDR + WRAM_BANK_SIZE] = val;
+		if (IS_CGB) {
+			gb->wram[addr - gb->cgb.wramBankOffset] = val;
+      return;
+    }
+
+    gb->wram[addr - WRAM_1_ADDR + WRAM_BANK_SIZE] = val;
 		return;
 
 	case 0xE:
@@ -1045,6 +1065,11 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 	case 0xF:
 		if(addr < OAM_ADDR)
 		{
+			if (IS_CGB) {
+				gb->wram[(addr - 0x2000) - gb->cgb.wramBankOffset] = val;
+				return;
+			}
+
 			gb->wram[addr - ECHO_ADDR] = val;
 			return;
 		}
@@ -1248,13 +1273,13 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
 				/* Prepare speed switch */
 				case 0x4D:
           gb->hram_io[IO_KEY1] = (gb->hram_io[IO_KEY1] & 0x80) | (val & 0x01);
-          break;
+          return;
 
         /* CGB VRAM BANK */
 				case 0x4F:
           gb->cgb.vramBank = val & 0x01;
-          if (IS_CGB) gb->cgb.vramBankOffset = VRAM_ADDR - (gb->cgb.vramBank << 13);
-          break;
+          gb->cgb.vramBankOffset = VRAM_ADDR - (gb->cgb.vramBank << 13);
+          return;
 
         /* Turn off boot rom */
 				case 0x50:
@@ -1281,7 +1306,7 @@ void __gb_write(struct gb_s *gb, uint_fast16_t addr, uint8_t val)
           gb->cgb.dmaMode = val >> 7;
 					if (gb->cgb.dmaActive) {
 						if (!gb->cgb.dmaMode) {
-							for (uint8_t i = 0; i < (gb->cgb.dmaSize << 4); i++) {
+							for (int i = 0; i < (gb->cgb.dmaSize << 4); i++) {
 								__gb_write(gb, ((gb->cgb.dmaDest & 0x1FF0) | 0x8000) + i, __gb_read(gb, (gb->cgb.dmaSource & 0xFFF0) + i));
 							}
 							gb->cgb.dmaSource += (gb->cgb.dmaSize << 4);
@@ -1787,58 +1812,62 @@ void __gb_draw_line(struct gb_s *gb)
 	if(gb->hram_io[IO_LCDC] & LCDC_OBJ_ENABLE)
 	{
 		uint8_t sprite_number;
-#if PEANUT_GB_HIGH_LCD_ACCURACY
 		uint8_t number_of_sprites = 0;
-
 		struct sprite_data sprites_to_render[NUM_SPRITES];
+#if PEANUT_GB_HIGH_LCD_ACCURACY
+		if (IS_CGB) {
+			/* Record number of sprites on the line being rendered, limited
+			* to the maximum number sprites that the Game Boy is able to
+			* render on each line (10 sprites). */
+			for(sprite_number = 0;
+					sprite_number < PEANUT_GB_ARRAYSIZE(sprites_to_render);
+					sprite_number++)
+			{
+				/* Sprite Y position. */
+				uint8_t OY = gb->oam[4 * sprite_number + 0];
+				/* Sprite X position. */
+				uint8_t OX = gb->oam[4 * sprite_number + 1];
 
-		/* Record number of sprites on the line being rendered, limited
-		 * to the maximum number sprites that the Game Boy is able to
-		 * render on each line (10 sprites). */
-		for(sprite_number = 0;
-				sprite_number < PEANUT_GB_ARRAYSIZE(sprites_to_render);
-				sprite_number++)
-		{
-			/* Sprite Y position. */
-			uint8_t OY = gb->oam[4 * sprite_number + 0];
-			/* Sprite X position. */
-			uint8_t OX = gb->oam[4 * sprite_number + 1];
-
-			/* If sprite isn't on this line, continue. */
-			if (gb->hram_io[IO_LY] +
-				(gb->hram_io[IO_LCDC] & LCDC_OBJ_SIZE ? 0 : 8) >= OY
-					|| gb->hram_io[IO_LY] + 16 < OY)
-				continue;
+				/* If sprite isn't on this line, continue. */
+				if (gb->hram_io[IO_LY] +
+					(gb->hram_io[IO_LCDC] & LCDC_OBJ_SIZE ? 0 : 8) >= OY
+						|| gb->hram_io[IO_LY] + 16 < OY)
+					continue;
 
 
-			sprites_to_render[number_of_sprites].sprite_number = sprite_number;
-			sprites_to_render[number_of_sprites].x = OX;
-			number_of_sprites++;
+				sprites_to_render[number_of_sprites].sprite_number = sprite_number;
+				sprites_to_render[number_of_sprites].x = OX;
+				number_of_sprites++;
+			}
+
+			/* If maximum number of sprites reached, prioritise X
+			* coordinate and object location in OAM. */
+			
+				qsort(&sprites_to_render[0], number_of_sprites,
+						sizeof(sprites_to_render[0]), compare_sprites);
+
+			if(number_of_sprites > MAX_SPRITES_LINE)
+				number_of_sprites = MAX_SPRITES_LINE;
 		}
-
-		/* If maximum number of sprites reached, prioritise X
-		 * coordinate and object location in OAM. */
-		qsort(&sprites_to_render[0], number_of_sprites,
-				sizeof(sprites_to_render[0]), compare_sprites);
-		if(number_of_sprites > MAX_SPRITES_LINE)
-			number_of_sprites = MAX_SPRITES_LINE;
 #endif
 
 		/* Render each sprite, from low priority to high priority. */
-#if PEANUT_GB_HIGH_LCD_ACCURACY
-		/* Render the top ten prioritised sprites on this scanline. */
+		if (IS_CGB) {
+      number_of_sprites = NUM_SPRITES;
+    }
+    /* Render the top ten prioritised sprites on this scanline. */
 		for(sprite_number = number_of_sprites - 1;
 				sprite_number != 0xFF;
 				sprite_number--)
 		{
-			uint8_t s = sprites_to_render[sprite_number].sprite_number;
-#else
-		for (sprite_number = NUM_SPRITES - 1;
-			sprite_number != 0xFF;
-			sprite_number--)
-		{
-			uint8_t s = sprite_number;
-#endif
+      uint8_t s = 0;
+      if (!IS_CGB) {
+        s = sprites_to_render[sprite_number].sprite_number;
+      }
+      else {
+        s = sprite_number;
+      }
+
 			uint8_t py, t1, t2, dir, start, end, shift, disp_x;
 			/* Sprite Y position. */
 			uint8_t OY = gb->oam[4 * s + 0];
@@ -1850,13 +1879,13 @@ void __gb_draw_line(struct gb_s *gb)
 			/* Additional attributes. */
 			uint8_t OF = gb->oam[4 * s + 3];
 
-#if !PEANUT_GB_HIGH_LCD_ACCURACY
-			/* If sprite isn't on this line, continue. */
-			if(gb->hram_io[IO_LY] +
-					(gb->hram_io[IO_LCDC] & LCDC_OBJ_SIZE ? 0 : 8) >= OY ||
-					gb->hram_io[IO_LY] + 16 < OY)
-				continue;
-#endif
+			if (IS_CGB) {
+				/* If sprite isn't on this line, continue. */
+				if(gb->hram_io[IO_LY] +
+						(gb->hram_io[IO_LCDC] & LCDC_OBJ_SIZE ? 0 : 8) >= OY ||
+						gb->hram_io[IO_LY] + 16 < OY)
+					continue;
+			}
 
 			/* Continue if sprite not visible. */
 			if(OX == 0 || OX >= 168)
@@ -2103,7 +2132,9 @@ void __gb_step_cpu(struct gb_s *gb)
 
 	case 0x10: /* STOP */
 		//gb->gb_halt = true;
+		// printf("HALT\n");
 		if (IS_CGB && (gb->hram_io[IO_KEY1] & 0x01)) {
+			// printf("HALT\n");
       gb->cgb.doubleSpeed ^= 1;
       gb->hram_io[IO_KEY1] = (gb->hram_io[IO_KEY1] & 0x7E) | ((gb->cgb.doubleSpeed & 1) << 7);
       break;
@@ -3437,6 +3468,15 @@ void __gb_step_cpu(struct gb_s *gb)
 		PGB_UNREACHABLE();
 	}
 
+	// printf("PC: %04X, AF: %04X, BC: %04X, DE: %04X, HL: %04X, SP: %04X", gb->cpu_reg.pc.reg, (gb->cpu_reg.a << 8) | gb->cpu_reg.f.reg, gb->cpu_reg.bc.reg, gb->cpu_reg.de.reg, gb->cpu_reg.hl.reg, gb->cpu_reg.sp.reg);
+  // printf(
+  //     "\t(%02X %02X %02X %02X)\n",
+  //     __gb_read(gb, gb->cpu_reg.pc.reg),
+  //     __gb_read(gb, gb->cpu_reg.pc.reg + 1),
+  //     __gb_read(gb, gb->cpu_reg.pc.reg + 2),
+  //     __gb_read(gb, gb->cpu_reg.pc.reg + 3)
+  // );
+
 	do
 	{
 		/* DIV register timing */
@@ -3757,7 +3797,7 @@ void gb_reset(struct gb_s *gb)
 		uint8_t hdr_chk;
 		hdr_chk = gb->gb_rom_read(gb, ROM_HEADER_CHECKSUM_LOC) != 0;
 
-		gb->cpu_reg.a = IS_CGB ? 0x1100 : 0x01;
+		gb->cpu_reg.a = IS_CGB ? 0x11 : 0x01;
 		gb->cpu_reg.f.f_bits.z = 1;
 		gb->cpu_reg.f.f_bits.n = 0;
 		gb->cpu_reg.f.f_bits.h = hdr_chk;
@@ -3768,12 +3808,15 @@ void gb_reset(struct gb_s *gb)
 		gb->cpu_reg.sp.reg = 0xFFFE;
 		gb->cpu_reg.pc.reg = 0x0100;
 
-		gb->hram_io[IO_DIV ] = 0xAB;
+		gb->hram_io[IO_DIV ] = IS_CGB ? 0xFF : 0xAB;
 		gb->hram_io[IO_LCDC] = 0x91;
 		gb->hram_io[IO_STAT] = 0x85;
 		gb->hram_io[IO_BOOT] = 0x01;
+		if (IS_CGB) {
+      gb->hram_io[IO_KEY1] = 0x00;
+		}
 
-		memset(gb->vram, 0x00, VRAM_SIZE);
+    memset(gb->vram, 0x00, VRAM_SIZE);
 	}
 	else
 	{
@@ -3910,7 +3953,8 @@ enum gb_init_error_e gb_init(struct gb_s *gb,
 	{
 		// check if we are in CGB mode. Don't force it, allow it to be overridden
 		if (gb->direct.forceGBC) {
-      IS_CGB = (gb->gb_rom_read(gb, cgb_flag) & 0x80) >> 7;
+      IS_CGB = 1;
+      // printf("IsGGB: %d\n", IS_CGB);
     }
 
     const uint8_t mbc_value = gb->gb_rom_read(gb, mbc_location);
